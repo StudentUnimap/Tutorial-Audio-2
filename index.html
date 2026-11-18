@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="ms">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Knight's Treasure: Lava Escape</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#151927;color:#f5f1e8;font-family:Arial,sans-serif;display:flex;justify-content:center;padding:24px}
+main{width:min(900px,100%)}h1{text-align:center;color:#e8bd68;margin:0 0 8px}.sub{text-align:center;color:#c5c8d1;margin:0 0 18px}
+.hud{display:flex;justify-content:space-around;gap:12px;background:#252c3d;padding:12px;border-radius:12px;margin-bottom:10px;font-weight:bold}
+.gamebox{position:relative;border:2px solid #8a6840;border-radius:12px;overflow:hidden;background:#202a46}
+canvas{display:block;width:100%;height:auto;image-rendering:pixelated}
+.overlay{position:absolute;inset:0;background:#101522dd;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:20px}
+.overlay h2{font-size:clamp(25px,5vw,42px);margin:8px}.overlay p{max-width:440px;line-height:1.5}
+button{border:0;border-radius:9px;padding:12px 20px;font-weight:bold;font-size:16px;cursor:pointer;background:#d69b37;color:#17120a}
+.controls{display:flex;justify-content:center;gap:12px;margin:14px 0}.controls button{min-width:76px;min-height:48px}.help{text-align:center;color:#c5c8d1;font-size:14px;line-height:1.6}
+#sound{background:#343d50;color:white;border:1px solid #69758c}
+</style>
+</head>
+<body>
+<main>
+<h1>⚔️ Knight's Treasure: Lava Escape</h1>
+<p class="sub">Kumpul syiling emas. Elakkan letusan lava. Bertahan selama mungkin!</p>
+<div class="hud"><span>🪙 Syiling: <b id="score">0</b></span><span>❤️ Nyawa: <b id="lives">3</b></span><span>🏆 Rekod: <b id="best">0</b></span></div>
+<div class="gamebox">
+<canvas id="game" width="720" height="390" aria-label="Permainan kesatria 2D"></canvas>
+<div class="overlay" id="overlay"><div style="font-size:48px">🛡️ ⚔️</div><h2 id="overlayTitle">LAVA ESCAPE</h2><p id="overlayText">Kumpul syiling, elakkan lava dan gunakan double jump untuk terus hidup!</p><button id="start">MULA BERMAIN</button></div>
+</div>
+<div class="controls">
+<button id="left" aria-label="Gerak kiri">◀</button>
+<button id="jump">⬆ JUMP ×2</button>
+<button id="right" aria-label="Gerak kanan">▶</button>
+<button id="sound">🔊 Sound ON</button>
+</div>
+<p class="help">A / D atau ← / → untuk bergerak.<br>SPACE / ↑ untuk melompat dua kali. Tekan sekali lagi ketika di udara untuk double jump.</p>
+</main>
+<script>
+(()=>{
+const canvas=document.getElementById('game'),ctx=canvas.getContext('2d'),W=720,H=390;
+const $=id=>document.getElementById(id);
+let running=false,score=0,lives=3,best=0,player,coins=[],hazards=[],particles=[],keys={},frame=0,raf=0,sound=true,audio=null,invuln=0,jumpCount=0,jumpPressed=false;
+function initAudio(){if(!audio)audio=new(window.AudioContext||window.webkitAudioContext)();if(audio.state==='suspended')audio.resume()}
+function tone(f,d=.07,type='sine',v=.06){if(!sound)return;try{initAudio();let o=audio.createOscillator(),g=audio.createGain();o.type=type;o.frequency.value=f;g.gain.setValueAtTime(v,audio.currentTime);g.gain.exponentialRampToValueAtTime(.001,audio.currentTime+d);o.connect(g);g.connect(audio.destination);o.start();o.stop(audio.currentTime+d)}catch(e){}}
+function adventureScream(){
+ if(!sound)return;
+ try{
+  initAudio();let t=audio.currentTime,d=.95,len=Math.floor(audio.sampleRate*d);
+  let buf=audio.createBuffer(1,len,audio.sampleRate),data=buf.getChannelData(0);
+  for(let i=0;i<len;i++){let x=i/len,env=Math.pow(1-x,1.2),f=390+230*Math.sin(x*13)-120*x;data[i]=env*(Math.sin(2*Math.PI*f*i/audio.sampleRate)*.55+(Math.random()*2-1)*.18)}
+  let src=audio.createBufferSource(),filter=audio.createBiquadFilter(),gain=audio.createGain();
+  src.buffer=buf;filter.type='bandpass';filter.frequency.value=750;filter.Q.value=.65;gain.gain.value=.65;
+  src.connect(filter);filter.connect(gain);gain.connect(audio.destination);src.start(t);
+  let o=audio.createOscillator(),g=audio.createGain();o.type='sawtooth';o.frequency.setValueAtTime(650,t);o.frequency.exponentialRampToValueAtTime(110,t+.9);g.gain.setValueAtTime(.12,t);g.gain.exponentialRampToValueAtTime(.001,t+.9);o.connect(g);g.connect(audio.destination);o.start(t);o.stop(t+.9);
+ }catch(e){}
+}
+function ui(){$('score').textContent=score;$('lives').textContent=lives;$('best').textContent=best}
+function reset(){score=0;lives=3;frame=0;invuln=0;jumpCount=0;jumpPressed=false;player={x:75,y:290,vx:0,vy:0,w:29,h:43,ground:false};coins=[];hazards=[];particles=[];ui()}
+function start(){cancelAnimationFrame(raf);reset();running=true;$('overlay').style.display='none';loop()}
+function end(){running=false;best=Math.max(best,score);ui();$('overlay').style.display='flex';$('overlayTitle').textContent='GAME OVER';$('overlayText').textContent='Syiling terkumpul: '+score+' | Rekod terbaik: '+best;$('start').textContent='MAIN SEMULA';tone(150,.2,'sawtooth')}
+function burst(x,y,color,n=12){for(let i=0;i<n;i++)particles.push({x,y,vx:(Math.random()-.5)*5,vy:-Math.random()*5,life:25+Math.random()*15,color})}
+function spawnCoin(){coins.push({x:40+Math.random()*640,y:130+Math.random()*155,r:9,phase:Math.random()*6})}
+function spawnHazard(){hazards.push({x:75+Math.random()*570,warning:55,active:65,dead:false})}
+function hit(a,b){return a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y}
+function update(){
+ frame++;let p=player;p.vx=(keys.right?4.2:0)-(keys.left?4.2:0);p.x=Math.max(0,Math.min(W-p.w,p.x+p.vx));
+ if(keys.jump&&!jumpPressed&&jumpCount<2){p.vy=jumpCount===0?-11.5:-10.5;jumpCount++;p.ground=false;tone(jumpCount===1?390:570,.075,'sine')}
+ jumpPressed=keys.jump;p.vy+=.48;p.y+=p.vy;
+ if(p.y+p.h>=350){p.y=350-p.h;p.vy=0;p.ground=true;jumpCount=0}else p.ground=false;
+ if(frame%75===0&&coins.length<8)spawnCoin();if(frame%135===0&&hazards.length<3)spawnHazard();
+ for(let i=coins.length-1;i>=0;i--){let q=coins[i];q.phase+=.1;if(Math.hypot(p.x+p.w/2-q.x,p.y+p.h/2-q.y)<24){coins.splice(i,1);score+=10;best=Math.max(best,score);ui();burst(q.x,q.y,'#ffdb4b',9);tone(950,.065,'sine')}}
+ for(let h of hazards){if(h.warning>0)h.warning--;else if(h.active>0){h.active--;if(!h.dead&&invuln<=0&&hit({x:p.x+4,y:p.y+5,w:p.w-8,h:p.h-5},{x:h.x-22,y:350-Math.min(75,h.active*1.1),w:44,h:Math.min(75,h.active*1.1)})){h.dead=true;lives--;invuln=100;burst(p.x+14,p.y+20,'#ff6347',20);adventureScream();ui();if(lives<=0){end();return}}}}
+ hazards=hazards.filter(h=>h.warning>0||h.active>0);if(invuln>0)invuln--;
+ for(let i=particles.length-1;i>=0;i--){let q=particles[i];q.x+=q.vx;q.y+=q.vy;q.vy+=.16;q.life--;if(q.life<=0)particles.splice(i,1)}
+ if(frame%60===0){score++;ui()}
+}
+function draw(){
+ ctx.clearRect(0,0,W,H);let sky=ctx.createLinearGradient(0,0,0,H);sky.addColorStop(0,'#202a46');sky.addColorStop(1,'#664339');ctx.fillStyle=sky;ctx.fillRect(0,0,W,H);
+ ctx.fillStyle='#d6b18a';ctx.beginPath();ctx.arc(590,65,27,0,7);ctx.fill();ctx.fillStyle='#343344';
+ for(let i=0;i<8;i++){let x=i*105-15;ctx.beginPath();ctx.moveTo(x,260);ctx.lineTo(x+48,135+(i%3)*22);ctx.lineTo(x+110,260);ctx.fill()}
+ ctx.fillStyle='#69513d';ctx.fillRect(0,350,W,40);ctx.fillStyle='#92714b';ctx.fillRect(0,350,W,7);
+ for(let x=10;x<W;x+=45){ctx.fillStyle='#3f382e';ctx.fillRect(x,365,20,4)}
+ for(let q of coins){let bob=Math.sin(q.phase)*3;ctx.fillStyle='#ffdb4b';ctx.beginPath();ctx.arc(q.x,q.y+bob,9,0,7);ctx.fill();ctx.strokeStyle='#a96a16';ctx.lineWidth=2;ctx.stroke();ctx.fillStyle='#a96a16';ctx.font='bold 11px serif';ctx.fillText('$',q.x-3,q.y+4+bob)}
+ for(let h of hazards){if(h.warning>0){ctx.fillStyle='#ffb13b';ctx.font='bold 19px sans-serif';ctx.fillText('!',h.x-5,330);ctx.strokeStyle='#f6a044';ctx.setLineDash([5,5]);ctx.beginPath();ctx.moveTo(h.x,350);ctx.lineTo(h.x,280);ctx.stroke();ctx.setLineDash([])}else{let ht=Math.min(75,h.active*1.1);ctx.fillStyle='#f15a24';ctx.beginPath();ctx.moveTo(h.x-25,350);ctx.lineTo(h.x-17,350-ht*.6);ctx.lineTo(h.x-8,350-ht);ctx.lineTo(h.x+2,350-ht*.65);ctx.lineTo(h.x+13,350-ht*.95);ctx.lineTo(h.x+25,350);ctx.fill();ctx.fillStyle='#ffb72e';ctx.fillRect(h.x-12,350-ht*.55,24,ht*.45)}}
+ let p=player;if(p&&invuln%12<7){ctx.fillStyle='#b6c1d1';ctx.fillRect(p.x+5,p.y+9,20,23);ctx.fillStyle='#e0b77a';ctx.fillRect(p.x+8,p.y,16,15);ctx.fillStyle='#252a39';ctx.fillRect(p.x+7,p.y-3,18,7);ctx.fillStyle='#e3c47b';ctx.fillRect(p.x+7,p.y+5,18,3);ctx.fillStyle='#fff';ctx.fillRect(p.x+18,p.y+5,3,3);ctx.fillStyle='#6d8295';ctx.fillRect(p.x+3,p.y+28,24,8);ctx.fillStyle='#d5dbe5';ctx.fillRect(p.x+4,p.y+36,8,7);ctx.fillRect(p.x+19,p.y+36,8,7);ctx.fillStyle='#9da9b7';ctx.fillRect(p.x-2,p.y+15,7,14);ctx.fillStyle='#eee';ctx.fillRect(p.x+29,p.y+8,3,25)}
+ for(let q of particles){ctx.globalAlpha=Math.max(0,q.life/40);ctx.fillStyle=q.color;ctx.fillRect(q.x,q.y,4,4)}ctx.globalAlpha=1;ctx.fillStyle='#fff';ctx.font='12px sans-serif';ctx.fillText('COLLECT COINS  •  AVOID LAVA',15,22);ctx.fillText('JUMPS: '+(2-jumpCount)+'/2',610,22)
+}
+function loop(){if(!running)return;update();draw();raf=requestAnimationFrame(loop)}
+$('start').addEventListener('click',start);
+$('sound').addEventListener('click',()=>{sound=!sound;$('sound').textContent=sound?'🔊 Sound ON':'🔇 Sound OFF';if(sound)tone(600)});
+function bind(id,key){let b=$(id);b.addEventListener('pointerdown',e=>{e.preventDefault();keys[key]=true;b.setPointerCapture(e.pointerId)});for(let ev of ['pointerup','pointercancel','lostpointercapture'])b.addEventListener(ev,()=>keys[key]=false)}
+bind('left','left');bind('right','right');bind('jump','jump');
+window.addEventListener('keydown',e=>{if(['ArrowLeft','ArrowRight','ArrowUp',' ','a','d','A','D','w','W'].includes(e.key)){e.preventDefault();if(e.key==='ArrowLeft'||e.key.toLowerCase()==='a')keys.left=true;if(e.key==='ArrowRight'||e.key.toLowerCase()==='d')keys.right=true;if(e.key==='ArrowUp'||e.key===' '||e.key.toLowerCase()==='w')keys.jump=true}});
+window.addEventListener('keyup',e=>{if(e.key==='ArrowLeft'||e.key.toLowerCase()==='a')keys.left=false;if(e.key==='ArrowRight'||e.key.toLowerCase()==='d')keys.right=false;if(e.key==='ArrowUp'||e.key===' '||e.key.toLowerCase()==='w')keys.jump=false});
+reset();draw();
+})();
+</script>
+</body>
+</html>
